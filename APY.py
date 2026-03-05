@@ -83,13 +83,27 @@ st.markdown("""
 MONTHS = ["April","May","June","July","August","September",
           "October","November","December","January","February","March"]
 
-def fy_idx(m):            return MONTHS.index(m)
-def kra_col(m):           return 4 + fy_idx(m)
-def sub_col_letter(m):    return chr(ord('D') + fy_idx(m))
+def fy_idx(m):          return MONTHS.index(m)
+def kra_col(m):         return 4 + fy_idx(m)
+def sub_col_letter(m):  return chr(ord('D') + fy_idx(m))
 def cluster_month_col(m): return 4 + fy_idx(m)
-def mc_closed_col(m):     return 6 + fy_idx(m) * 2
-def amc_ew_base_col(m):   return 5 + fy_idx(m) * 4
-# AMC+EW layout per month: base=BDG Nos, base+1=BDG Value, base+2=AMC Nos, base+3=AMC Value
+def mc_closed_col(m):   return 6 + fy_idx(m) * 2
+def amc_ew_base_col(m): return 5 + fy_idx(m) * 4
+
+# Spare sheet (AMC Per Call Cost) layout per franchise row-group:
+# col1=FrCode, col2=Exec, col3=FrName,
+# then per month: ZWR, AMC_Calls, Cost_Per_Call  → 3 cols per month
+# base month col = 4 + fy_idx * 3
+def spare_amc_col(m):
+    # AMC spare: ZWR = base, Calls = base+1, CostPerCall = base+2
+    return 4 + fy_idx(m) * 3
+
+# SA Attendance sheet layout per franchise:
+# col1=FrCode, col2=Exec, ...
+# month col = total SA count column, and the % is a stored value (not formula)
+# Structure confirmed: col = 4 + fy_idx (same as cluster_month_col)
+# BUT SA Attendance has: col A = FrCode, col B = Executive, col C = Franchise name,
+# then Apr=col4, May=col5 ... (stores % attendance as a decimal or integer)
 
 def norm(s):
     return re.sub(r'[^a-z0-9]', '', str(s or "").lower())
@@ -103,7 +117,7 @@ with c1:
     st.markdown('<div class="upload-card"><p class="card-title">📁 KL Cluster Report</p>', unsafe_allow_html=True)
     kl_file = st.file_uploader("kl", type=["xlsx"], key="kl", label_visibility="collapsed")
     if kl_file: st.markdown(f'<div class="file-ok">✓ &nbsp;{kl_file.name}</div>', unsafe_allow_html=True)
-    else: st.markdown('<p style="color:#374151;font-size:12px;margin-top:4px;">MC Reg · Abv2Days · AMC+EW · Social · Apni Dhukhan · ESS · ACC · Spare</p>', unsafe_allow_html=True)
+    else: st.markdown('<p style="color:#374151;font-size:12px;margin-top:4px;">MC Reg · AMC+EW · SA Attendance · Spare · Social · ESS · ACC</p>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 with c2:
     st.markdown('<div class="upload-card"><p class="card-title">📁 Parameter Dashboard</p>', unsafe_allow_html=True)
@@ -130,6 +144,7 @@ with mc2:
     scl  = sub_col_letter(selected_month)
     mcc  = mc_closed_col(selected_month); cmc = cluster_month_col(selected_month)
     amc_base = amc_ew_base_col(selected_month)
+    spare_col = spare_amc_col(selected_month)
     st.markdown(f"""
     <div style="background:#0F1729;border:1px solid #1E3A5F;border-radius:12px;
          padding:14px 20px;display:flex;gap:24px;align-items:center;flex-wrap:wrap;">
@@ -141,8 +156,8 @@ with mc2:
            <div style="font-size:18px;font-weight:700;color:#F472B6;">col {cmc}</div></div>
       <div><div style="font-size:11px;color:#475569;text-transform:uppercase;">MC Closed Col</div>
            <div style="font-size:18px;font-weight:700;color:#FB923C;">col {mcc}</div></div>
-      <div><div style="font-size:11px;color:#475569;text-transform:uppercase;">AMC+EW Cols</div>
-           <div style="font-size:18px;font-weight:700;color:#34D399;">{amc_base}–{amc_base+3}</div></div>
+      <div><div style="font-size:11px;color:#475569;text-transform:uppercase;">Spare Col</div>
+           <div style="font-size:18px;font-weight:700;color:#34D399;">col {spare_col}</div></div>
       <div><div style="font-size:11px;color:#475569;text-transform:uppercase;">KRA Col</div>
            <div style="font-size:18px;font-weight:700;color:#60A5FA;">{kc} → {scl}</div></div>
     </div>""", unsafe_allow_html=True)
@@ -161,11 +176,15 @@ btn = st.button("⚡  Generate Updated KRA", disabled=not all_ready)
 
 # ── HELPERS ────────────────────────────────────────────────────────────────────
 def safe_int(v):
-    try: return int(float(v)) if v not in (None,"") and str(v).strip() not in ('nan','None','—','#N/A','#REF!') else 0
+    try:
+        if v in (None, "") or str(v).strip() in ('nan','None','—','#N/A','#REF!'): return 0
+        return int(float(v))
     except: return 0
 
 def safe_float(v):
-    try: return float(v) if v not in (None,"") and str(v).strip() not in ('nan','None','—','#N/A','#REF!') else 0.0
+    try:
+        if v in (None, "") or str(v).strip() in ('nan','None','—','#N/A','#REF!'): return 0.0
+        return float(v)
     except: return 0.0
 
 def find_sheet(wb, keywords):
@@ -191,6 +210,7 @@ def fuzzy_score(a, b):
     return max(prefix_score, token_score)
 
 def build_code_lookup(ws, code_col, val_col, skip_rows=1):
+    """Build {7-digit-code: value} from a sheet."""
     lkp = {}
     if not ws: return lkp
     for r in range(1 + skip_rows, ws.max_row + 1):
@@ -198,6 +218,10 @@ def build_code_lookup(ws, code_col, val_col, skip_rows=1):
         if re.match(r'^\d{7}$', code):
             lkp[code] = ws.cell(r, val_col).value
     return lkp
+
+def scan_all_sheets(wb):
+    """Print all sheet names for debugging."""
+    return [s for s in wb.sheetnames]
 
 def auto_detect_codes(kra_franchises, ws_ins):
     param_entries = []
@@ -218,8 +242,8 @@ def auto_detect_codes(kra_franchises, ws_ins):
 
 def auto_build_tab_row_maps(ws_map, kra_franchises):
     """
-    Scan each KRA tab independently (col B) to find franchise rows.
-    Order can differ per tab — this handles it correctly.
+    Per-tab independent row detection via col B scan.
+    Handles any franchise ordering per sheet.
     """
     result = {}
     for tab, ws in ws_map.items():
@@ -232,7 +256,6 @@ def auto_build_tab_row_maps(ws_map, kra_franchises):
 
         tab_map = {}
         used_rows = set()
-
         for kname in kra_franchises:
             kn = norm(kname)
             best_row, best_score = None, 0
@@ -246,40 +269,80 @@ def auto_build_tab_row_maps(ws_map, kra_franchises):
                 tab_map[kname] = best_row
                 used_rows.add(best_row)
 
-        # Overall row
+        # Detect overall / total row
         for r, b, bn in col_b_rows:
-            if any(x in b.lower() for x in ["overall","nandu","arjun","manu","satheesh",
-                                              "shibu","sudeesh","jaimon","total"]):
+            if any(x in b.lower() for x in ["overall","total","grand"]):
                 tab_map["OVERALL"] = r; break
 
         result[tab] = tab_map
     return result
 
-def build_spare_lookup(ws, month_col):
+# ── SA ATTENDANCE lookup ──────────────────────────────────────────────────────
+def build_sa_attendance_lookup(ws, month_col):
     """
-    Build {code: {field_key: value}} from Spare Consumption sheet.
-    Each franchise has 4 data rows keyed by col C label:
-      AMC TY  → amc_ty
-      AMC LY  → amc_ly
-      AMC Calls → amc_calls
-      Wty Calls → wty_calls
+    SA Attendance sheet:
+      Col A = Franchise Code (7-digit)
+      Col B = Executive Name
+      Col C = Franchise Name  (some sheets skip col C and put data from col B)
+      Month cols = 4 + fy_idx (April=4, May=5 ... March=15)
+    
+    Stores the ATTENDANCE % directly (e.g. 94.8 meaning 94.8%)
+    We also need total No. of SAs. SA Attendance sheet likely has:
+      Row per franchise with attendance %.
+    We return {code: attendance_pct}
     """
     lkp = {}
     if not ws: return lkp
-    for r in range(3, ws.max_row + 1):
+    for r in range(1, ws.max_row + 1):
         code = str(ws.cell(r, 1).value or "").strip()
-        label = str(ws.cell(r, 3).value or "").strip().lower()
-        val   = ws.cell(r, month_col).value
         if re.match(r'^\d{7}$', code):
-            if code not in lkp: lkp[code] = {}
-            if   "amc ty" in label or "this year" in label or label.endswith("ty"):
-                lkp[code]["amc_ty"]    = val
-            elif "amc ly" in label or "last year" in label or label.endswith("ly"):
-                lkp[code]["amc_ly"]    = val
-            elif "amc" in label and "call" in label:
-                lkp[code]["amc_calls"] = val
-            elif "wty" in label and "call" in label:
-                lkp[code]["wty_calls"] = val
+            val = ws.cell(r, month_col).value
+            lkp[code] = safe_float(val)
+    return lkp
+
+# ── SPARE (AMC Per Call Cost) lookup ─────────────────────────────────────────
+def build_spare_lookups(ws, month_col):
+    """
+    AMC Per Call Cost sheet structure per row:
+      Col 1 = Franchise Code (7-digit) — BUT many rows share same code (AMC row, WTY row)
+      Col 2 = Executive
+      Col 3 = Franchise Name
+      Then per month: ZWR_value, Calls, Cost_Per_Call  (3 cols per month)
+      
+    BUT looking at actual data, the sheet has TWO separate sections:
+      1) AMC section: rows with FrCode, then ZWR(spare spend), AMC calls, cost/call
+      2) WTY section: same codes, WTY ZWR, WTY calls, WTY cost/call
+    
+    We distinguish AMC vs WTY rows by scanning adjacent text or row position.
+    Simpler approach: scan for duplicate codes and assign first = AMC, second = WTY.
+    
+    Returns {code: {amc_zwr, amc_calls, wty_zwr, wty_calls}}
+    """
+    lkp = {}
+    if not ws: return lkp
+    
+    code_seen = {}  # code -> count of times seen
+    for r in range(1, ws.max_row + 1):
+        code = str(ws.cell(r, 1).value or "").strip()
+        if not re.match(r'^\d{7}$', code): continue
+        
+        zwr_val   = safe_float(ws.cell(r, month_col).value)
+        calls_val = safe_int(ws.cell(r, month_col + 1).value)
+        
+        if code not in lkp:
+            lkp[code] = {"amc_zwr": 0.0, "amc_calls": 0, "wty_zwr": 0.0, "wty_calls": 0}
+            code_seen[code] = 0
+        
+        code_seen[code] += 1
+        if code_seen[code] == 1:
+            # First occurrence = AMC row
+            lkp[code]["amc_zwr"]   = zwr_val
+            lkp[code]["amc_calls"] = calls_val
+        elif code_seen[code] == 2:
+            # Second occurrence = WTY row
+            lkp[code]["wty_zwr"]   = zwr_val
+            lkp[code]["wty_calls"] = calls_val
+    
     return lkp
 
 def wr(ws, r, c, v):
@@ -316,15 +379,25 @@ if btn and all_ready:
     try:
         # ── STEP 0: Read files ──────────────────────────────────────────────
         steps_ph.markdown(render_steps(0), unsafe_allow_html=True)
-        fi   = fy_idx(selected_month); kc = kra_col(selected_month)
-        scl  = sub_col_letter(selected_month)
-        cmc  = cluster_month_col(selected_month); mcc = mc_closed_col(selected_month)
+        fi       = fy_idx(selected_month)
+        kc       = kra_col(selected_month)
+        scl      = sub_col_letter(selected_month)
+        cmc      = cluster_month_col(selected_month)
+        mcc      = mc_closed_col(selected_month)
         amc_base = amc_ew_base_col(selected_month)
+        sp_col   = spare_amc_col(selected_month)
 
         kl_wb    = load_workbook(BytesIO(kl_file.read()),    data_only=True)
         param_wb = load_workbook(BytesIO(param_file.read()), data_only=True)
-        kra_wb   = load_workbook(BytesIO(kra_file.read()))   # keep_vba default = True
-        log(f"Loaded | {selected_month} | cluster_col:{cmc} mc_col:{mcc} kra_col:{kc}({scl}) amc_ew_cols:{amc_base}-{amc_base+3}", "ok")
+        kra_wb   = load_workbook(BytesIO(kra_file.read()))
+
+        kl_sheets    = scan_all_sheets(kl_wb)
+        param_sheets = scan_all_sheets(param_wb)
+        kra_sheets   = scan_all_sheets(kra_wb)
+        log(f"KL sheets: {kl_sheets}", "info")
+        log(f"Param sheets: {param_sheets}", "info")
+        log(f"KRA sheets: {kra_sheets}", "info")
+        log(f"Month={selected_month} | cluster_col={cmc} | mc_col={mcc} | spare_col={sp_col} | kra_col={kc}({scl})", "ok")
 
         # ── STEP 1: Read KRA franchises + auto-detect codes ─────────────────
         steps_ph.markdown(render_steps(1), unsafe_allow_html=True)
@@ -333,8 +406,8 @@ if btn and all_ready:
         if ws_cl_kra:
             for r in range(1, ws_cl_kra.max_row + 1):
                 b = str(ws_cl_kra.cell(r,2).value or "").strip()
-                c = str(ws_cl_kra.cell(r,3).value or "").strip()
-                if b and c.lower() == "installation" and b.lower() not in ("franchisee",""):
+                c_val = str(ws_cl_kra.cell(r,3).value or "").strip()
+                if b and c_val.lower() == "installation" and b.lower() not in ("franchisee",""):
                     kra_franchises.append(b)
 
         ws_ins   = find_sheet(param_wb, ["ins"])
@@ -344,20 +417,20 @@ if btn and all_ready:
 
         for kname, (code, matched, score) in code_map.items():
             if code: log(f"'{kname}' → {code} '{matched}' (score:{score})", "ok")
-            else:    log(f"'{kname}' → NO CODE (inactive/mismatch)", "warn")
+            else:    log(f"'{kname}' → NO CODE", "warn")
         log(f"{len(kra_franchises)} franchises | {sum(1 for v in KRA_CODES.values() if v)} codes resolved", "ok")
 
-        # ── STEP 2: Build all lookups ───────────────────────────────────────
+        # ── STEP 2: Build lookups ───────────────────────────────────────────
         steps_ph.markdown(render_steps(2), unsafe_allow_html=True)
 
-        # Parameter Dashboard sheets
+        # --- Parameter Dashboard sheets ---
         ws_nr     = find_sheet(param_wb, ["nr"])
         ws_css    = find_sheet(param_wb, ["css"])
         ws_mc_hit = find_sheet(param_wb, ["mc hit"])
         ws_rep    = find_sheet(param_wb, ["rep call","rep calls"])
         ws_sa_p   = find_sheet(param_wb, ["sa prod"])
 
-        # KL Cluster Report sheets
+        # --- KL Cluster Report sheets ---
         ws_mc_reg  = find_sheet(kl_wb, ["mc reg"])
         ws_abv2    = find_sheet(kl_wb, ["abv 2"])
         ws_sa_att  = find_sheet(kl_wb, ["sa attend"])
@@ -366,9 +439,29 @@ if btn and all_ready:
         ws_acc_cl  = find_sheet(kl_wb, ["acc bdg"])
         ws_dhukhan = find_sheet(kl_wb, ["apni"])
         ws_amc_ew  = find_sheet(kl_wb, ["amc+ew","amc ew","amc+"])
-        ws_spare   = find_sheet(kl_wb, ["spare","consump","per call cost"])
+        ws_spare   = find_sheet(kl_wb, ["per call cost","amc per call","spare"])
 
-        # ── Parameter lookups (keyed by 7-digit code) ────────────────────
+        log(f"SA Attend sheet: '{ws_sa_att.title if ws_sa_att else 'NOT FOUND'}'", "ok" if ws_sa_att else "warn")
+        log(f"Spare sheet: '{ws_spare.title if ws_spare else 'NOT FOUND'}'", "ok" if ws_spare else "warn")
+
+        # Inspect SA Attendance sheet header to confirm column layout
+        if ws_sa_att:
+            header_row = [str(ws_sa_att.cell(1, c).value or "") for c in range(1, 20)]
+            log(f"SA Attend row1: {header_row}", "info")
+            # Check first few data rows
+            for r in range(2, 6):
+                row_data = [str(ws_sa_att.cell(r, c).value or "") for c in range(1, 8)]
+                log(f"SA Attend row{r}: {row_data}", "info")
+
+        # Inspect Spare sheet header
+        if ws_spare:
+            header_row = [str(ws_spare.cell(1, c).value or "") for c in range(1, 16)]
+            log(f"Spare row1: {header_row}", "info")
+            for r in range(2, 6):
+                row_data = [str(ws_spare.cell(r, c).value or "") for c in range(1, 10)]
+                log(f"Spare row{r}: {row_data}", "info")
+
+        # ── Standard code-keyed lookups ────────────────────────────────────
         lk_ins_closed = build_code_lookup(ws_ins,    1, 3, skip_rows=2)
         lk_ins_6hrs   = build_code_lookup(ws_ins,    1, 4, skip_rows=2)
         lk_ser_closed = build_code_lookup(ws_ins,    1, 5, skip_rows=2)
@@ -383,31 +476,38 @@ if btn and all_ready:
         lk_rep_total  = build_code_lookup(ws_rep,    2, 6, skip_rows=1)
         lk_rep_ticket = build_code_lookup(ws_rep,    2, 7, skip_rows=1)
 
-        # SA Prod: col10=No of SAs, col11=SA Productivity ratio
-        # SA Attendance: month col = ratio of SAs attending 25 days
-        lk_sa_count   = build_code_lookup(ws_sa_p,  2, 10, skip_rows=1)  # No. of SAs
-        lk_sa_ratio   = build_code_lookup(ws_sa_att, 1, cmc, skip_rows=1) # attendance ratio
+        # SA Prod: No. of SAs = col 10
+        lk_sa_count = build_code_lookup(ws_sa_p, 2, 10, skip_rows=1)
+
+        # SA Attendance: attendance % stored directly per month column
+        # col1=code, month_col=cmc (same layout as other KL sheets)
+        lk_sa_att_pct = build_sa_attendance_lookup(ws_sa_att, cmc)
 
         # KL Cluster lookups
-        lk_mc_closed  = build_code_lookup(ws_mc_reg,  1, mcc, skip_rows=2)
-        lk_abv2       = build_code_lookup(ws_abv2,    1, cmc, skip_rows=1)
-        lk_social     = build_code_lookup(ws_social,  1, cmc, skip_rows=1)
-        lk_ess_tgt    = build_code_lookup(ws_ess_cl,  1, 22, skip_rows=1)
-        lk_ess_ach    = build_code_lookup(ws_ess_cl,  1, 23, skip_rows=1)
-        lk_acc_tgt    = build_code_lookup(ws_acc_cl,  1, 22, skip_rows=1)
-        lk_acc_ach    = build_code_lookup(ws_acc_cl,  1, 23, skip_rows=1)
-        lk_dhukhan    = build_code_lookup(ws_dhukhan, 1, cmc, skip_rows=1)
+        lk_mc_closed   = build_code_lookup(ws_mc_reg,  1, mcc, skip_rows=2)
+        lk_abv2        = build_code_lookup(ws_abv2,    1, cmc, skip_rows=1)
+        lk_social      = build_code_lookup(ws_social,  1, cmc, skip_rows=1)
+        lk_ess_tgt     = build_code_lookup(ws_ess_cl,  1, 22, skip_rows=1)
+        lk_ess_ach     = build_code_lookup(ws_ess_cl,  1, 23, skip_rows=1)
+        lk_acc_tgt     = build_code_lookup(ws_acc_cl,  1, 22, skip_rows=1)
+        lk_acc_ach     = build_code_lookup(ws_acc_cl,  1, 23, skip_rows=1)
+        lk_dhukhan     = build_code_lookup(ws_dhukhan, 1, cmc, skip_rows=1)
 
-        # AMC+EW: base col → BDG Nos, base+1 → BDG Value, base+2 → AMC Nos, base+3 → AMC Value
+        # AMC+EW per month block
         lk_amc_bdg_nos = build_code_lookup(ws_amc_ew, 1, amc_base,   skip_rows=2)
         lk_amc_bdg_val = build_code_lookup(ws_amc_ew, 1, amc_base+1, skip_rows=2)
         lk_amc_nos_ach = build_code_lookup(ws_amc_ew, 1, amc_base+2, skip_rows=2)
         lk_amc_val_ach = build_code_lookup(ws_amc_ew, 1, amc_base+3, skip_rows=2)
 
-        # Spare Consumption: multi-field lookup per code
-        lk_spare = build_spare_lookup(ws_spare, cmc) if ws_spare else {}
+        # Spare (AMC Per Call Cost) lookups
+        lk_spare = build_spare_lookups(ws_spare, sp_col)
 
-        log(f"All lookups built | AMC+EW:'{ws_amc_ew.title if ws_amc_ew else 'NOT FOUND'}' | Spare:'{ws_spare.title if ws_spare else 'NOT FOUND'}'", "ok")
+        # Log sample spare data
+        sample_codes = list(lk_spare.keys())[:3]
+        for sc in sample_codes:
+            log(f"Spare sample {sc}: {lk_spare[sc]}", "info")
+
+        log(f"All lookups built | SA Att entries:{len(lk_sa_att_pct)} | Spare entries:{len(lk_spare)}", "ok")
 
         # ── Build data dict ──────────────────────────────────────────────────
         def g(lk, kname, fn=safe_int):
@@ -416,8 +516,8 @@ if btn and all_ready:
 
         def g_spare(kname, field):
             code = KRA_CODES.get(kname)
-            if not code: return 0.0
-            return safe_float(lk_spare.get(code, {}).get(field, 0))
+            if not code: return 0
+            return lk_spare.get(code, {}).get(field, 0)
 
         data = {}
         for kname in all_names:
@@ -426,31 +526,32 @@ if btn and all_ready:
             mc_c   = g(lk_mc_hit_cl,  kname)
 
             # SA Attendance:
-            #   Total SA   = from SA Prod col10 (No. of SAs)
-            #   SA 25days  = ratio (from SA Attendance sheet) × SA total
-            sa_total  = g(lk_sa_count, kname)
-            sa_ratio  = g(lk_sa_ratio, kname, safe_float)
-            sa_25days = round(sa_ratio * sa_total)
+            #   sa_total    = No. of SAs from SA Prod sheet
+            #   sa_att_pct  = Attendance % from SA Attendance sheet (stored value)
+            #   sa_25days   = round(sa_total × sa_att_pct / 100)  ← SAs who attended 25 days
+            sa_total   = g(lk_sa_count, kname)
+            sa_att_pct = g(lk_sa_att_pct, kname, safe_float)
+            sa_25days  = round(sa_total * sa_att_pct / 100) if sa_att_pct > 1 else round(sa_total * sa_att_pct)
 
             data[kname] = {
-                # Call Load / INS / SER
+                # Call Load
                 "ins_closed":    ins_c,
                 "ins_6hrs":      g(lk_ins_6hrs,   kname),
                 "ser_closed":    ser_c,
                 "ser_24hrs":     g(lk_ser_24hrs,   kname),
                 "mc_hit_closed": mc_c,
                 "mc_hit_reg":    g(lk_mc_hit_reg,  kname),
-                # >2 days Pending
+                # >2 days
                 "ser_closed_2d": ser_c,
                 "avg_pend":      round(g(lk_abv2, kname, safe_float), 2),
-                # Repeat Calls
+                # Repeat
                 "rep_ticket":    g(lk_rep_ticket,  kname),
                 "rep_total":     g(lk_rep_total,   kname),
                 # CSS
                 "css_ok":        g(lk_css_ok,      kname),
                 "css_not_ok":    g(lk_css_not_ok,  kname),
                 "css_happy":     g(lk_css_happy,   kname),
-                # Negative Response
+                # NR
                 "nr_closed":     g(lk_nr_closed,   kname),
                 "nr_total":      g(lk_nr_total,    kname),
                 # Social
@@ -458,12 +559,13 @@ if btn and all_ready:
                 "social":        g(lk_social,      kname),
                 # SA Attendance
                 "sa_total":      sa_total,
+                "sa_att_pct":    sa_att_pct,
                 "sa_25days":     sa_25days,
-                # AMC Achievement — from AMC+EW (KL Cluster)
-                "amc_bdg_nos":   g(lk_amc_bdg_nos, kname, safe_float),  # Target Nos (Potential)
-                "amc_nos_ach":   g(lk_amc_nos_ach, kname, safe_float),  # Achieved Nos
-                "amc_bdg_val":   g(lk_amc_bdg_val, kname, safe_float),  # Target Value (Potential)
-                "amc_val_ach":   g(lk_amc_val_ach, kname, safe_float),  # Achieved Value
+                # AMC Achievement
+                "amc_bdg_nos":   g(lk_amc_bdg_nos, kname, safe_float),
+                "amc_nos_ach":   g(lk_amc_nos_ach, kname, safe_float),
+                "amc_bdg_val":   g(lk_amc_bdg_val, kname, safe_float),
+                "amc_val_ach":   g(lk_amc_val_ach, kname, safe_float),
                 # Essential / Accessories
                 "ess_tgt":       g(lk_ess_tgt,  kname, safe_float),
                 "ess_ach":       g(lk_ess_ach,  kname, safe_float),
@@ -471,11 +573,11 @@ if btn and all_ready:
                 "acc_ach":       g(lk_acc_ach,  kname, safe_float),
                 # Exchange
                 "exchange":      g(lk_dhukhan,  kname),
-                # Spare Consumption — from KL Spare sheet
-                "spare_amc_ty":    g_spare(kname, "amc_ty"),    # AMC TY (This Year)
-                "spare_amc_ly":    g_spare(kname, "amc_ly"),    # AMC LY (Last Year)
-                "spare_amc_calls": g_spare(kname, "amc_calls"), # AMC Call Closed
-                "spare_wty_calls": g_spare(kname, "wty_calls"), # Wty Call Closed
+                # Spare Consumption (AMC Per Call Cost)
+                "spare_amc_zwr":   safe_float(g_spare(kname, "amc_zwr")),
+                "spare_amc_calls": safe_int(g_spare(kname, "amc_calls")),
+                "spare_wty_zwr":   safe_float(g_spare(kname, "wty_zwr")),
+                "spare_wty_calls": safe_int(g_spare(kname, "wty_calls")),
             }
 
         log(f"Data built for {len(data)} entries", "ok")
@@ -502,7 +604,6 @@ if btn and all_ready:
         missing_ws = [k for k,v in ws_map.items() if not v]
         if missing_ws: log(f"Missing KRA sheets: {missing_ws}", "warn")
 
-        # Build row maps independently per tab — handles any ordering
         kra_rmaps = auto_build_tab_row_maps(ws_map, all_names)
 
         for tab, rmap in kra_rmaps.items():
@@ -511,7 +612,10 @@ if btn and all_ready:
             if unmatched: log(f"'{tab}': unmatched → {unmatched}", "warn")
             else:         log(f"'{tab}': all {len(matched)} matched ✓", "ok")
 
-        log(f"Row maps built for {len(kra_rmaps)} tabs", "ok")
+        # Debug: show detected rows for SA Attendance and Spare
+        for tab in ["SA Attendance", "Spare Consumption"]:
+            rmap = kra_rmaps.get(tab, {})
+            log(f"Row map '{tab}': {rmap}", "info")
 
         # ── STEP 4: Write data ───────────────────────────────────────────────
         steps_ph.markdown(render_steps(4), unsafe_allow_html=True)
@@ -532,27 +636,24 @@ if btn and all_ready:
                 elif tab == "Installation":
                     wr(ws, sr,   col, d["ins_closed"])
                     wr(ws, sr+1, col, d["ins_6hrs"])
-                    # sr+2 = % formula → DO NOT TOUCH
 
                 elif tab == "Service":
                     wr(ws, sr,   col, d["ser_closed"])
                     wr(ws, sr+1, col, d["ser_24hrs"])
-                    # sr+2 = % formula → DO NOT TOUCH
 
                 elif tab == ">2 days Pending":
                     wr(ws, sr,   col, d["ser_closed_2d"])
                     wr(ws, sr+1, col, d["avg_pend"])
-                    # sr+2 = % formula → DO NOT TOUCH
 
                 elif tab == "Repeat Calls":
                     wr(ws, sr,   col, d["rep_ticket"])
                     wr(ws, sr+1, col, d["rep_total"])
-                    # sr+2 = % formula → DO NOT TOUCH
 
                 elif tab == "SA Attendance":
-                    # sr+0: Total No of SA
-                    # sr+1: SA call closed 25 days   ← ratio × SA total
-                    # sr+2: SA Attendance 25 Days %  ← formula → DO NOT TOUCH
+                    # KRA SA Attendance tab block per franchise:
+                    # sr+0: Total No of SA      ← sa_total
+                    # sr+1: SA 25 Days count    ← sa_25days (= sa_total × att% / 100)
+                    # sr+2: SA Attendance %     ← FORMULA (=sr+1/sr+0*100) → DO NOT TOUCH
                     wr(ws, sr,   col, d["sa_total"])
                     wr(ws, sr+1, col, d["sa_25days"])
 
@@ -568,20 +669,18 @@ if btn and all_ready:
                 elif tab == "Social M Calls":
                     wr(ws, sr,   col, d["total_calls"])
                     wr(ws, sr+1, col, d["social"])
-                    # sr+2 = % formula → DO NOT TOUCH
 
                 elif tab == "MC Calls":
                     wr(ws, sr,   col, d["mc_hit_closed"])
                     wr(ws, sr+1, col, d["mc_hit_reg"])
 
                 elif tab == "AMC Achievement":
-                    # 6-row block per franchise:
-                    # sr+0: AMC Target Nos  → BDG Nos (Potential)
+                    # sr+0: AMC Target Nos  → BDG Nos
                     # sr+1: AMC Nos Ach     → AMC Nos achieved
-                    # sr+2: AMC Nos Ach %   → FORMULA → DO NOT TOUCH
-                    # sr+3: AMC Value (Tgt) → BDG Value (Potential)
+                    # sr+2: AMC Nos %       → FORMULA
+                    # sr+3: AMC Value Tgt   → BDG Value
                     # sr+4: AMC Value Ach   → AMC Value achieved
-                    # sr+5: AMC Value Ach % → FORMULA → DO NOT TOUCH
+                    # sr+5: AMC Value %     → FORMULA
                     wr(ws, sr,   col, d["amc_bdg_nos"])
                     wr(ws, sr+1, col, d["amc_nos_ach"])
                     wr(ws, sr+3, col, d["amc_bdg_val"])
@@ -599,17 +698,16 @@ if btn and all_ready:
                     wr(ws, sr, col, d["exchange"])
 
                 elif tab == "Spare Consumption":
-                    # 7-row block per franchise:
-                    # sr+0: AMC TY (This Year value)
-                    # sr+1: AMC LY (Last Year value)
-                    # sr+2: Increase/Decrease %   → FORMULA → DO NOT TOUCH
-                    # sr+3: AMC Call Closed
-                    # sr+4: Wty Call Closed
-                    # sr+5: AMC Per Call           → FORMULA → DO NOT TOUCH
-                    # sr+6: Wty Per Call           → FORMULA → DO NOT TOUCH
-                    wr(ws, sr,   col, d["spare_amc_ty"])
-                    wr(ws, sr+1, col, d["spare_amc_ly"])
-                    wr(ws, sr+3, col, d["spare_amc_calls"])
+                    # KRA Spare Consumption tab block per franchise:
+                    # sr+0: AMC ZWR (Spare spend on AMC calls)  ← spare_amc_zwr
+                    # sr+1: AMC Calls Closed                    ← spare_amc_calls
+                    # sr+2: AMC Cost Per Call                   ← FORMULA (=sr+0/sr+1) → DO NOT TOUCH
+                    # sr+3: WTY ZWR (Spare spend on Wty calls)  ← spare_wty_zwr
+                    # sr+4: WTY Calls Closed                    ← spare_wty_calls
+                    # sr+5: WTY Cost Per Call                   ← FORMULA → DO NOT TOUCH
+                    wr(ws, sr,   col, d["spare_amc_zwr"])
+                    wr(ws, sr+1, col, d["spare_amc_calls"])
+                    wr(ws, sr+3, col, d["spare_wty_zwr"])
                     wr(ws, sr+4, col, d["spare_wty_calls"])
 
                 if tab not in updated: updated.append(tab)
@@ -688,29 +786,38 @@ if btn and all_ready:
             "Matched Param Name": code_map[kname][1] or "NOT FOUND",
             "Score":              f"{code_map[kname][2]:.2f}",
             "Status":             "✅" if code_map[kname][0] else "⚠️"
-        } for kname in kra_franchises]), use_container_width=True, height=340)
+        } for kname in kra_franchises]), use_container_width=True, height=320)
 
         # Data preview
         st.markdown('<p style="font-size:13px;color:#64748B;font-weight:600;letter-spacing:0.8px;'
-                    'text-transform:uppercase;margin:20px 0 8px;">Data Preview</p>',
+                    'text-transform:uppercase;margin:20px 0 8px;">SA + Spare Preview</p>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame([{
+            "Franchise":        kname,
+            "SA Total":         data[kname]["sa_total"],
+            "SA Att %":         f'{data[kname]["sa_att_pct"]:.1f}',
+            "SA 25d Count":     data[kname]["sa_25days"],
+            "AMC ZWR":          f'{data[kname]["spare_amc_zwr"]:,.0f}',
+            "AMC Calls":        data[kname]["spare_amc_calls"],
+            "WTY ZWR":          f'{data[kname]["spare_wty_zwr"]:,.0f}',
+            "WTY Calls":        data[kname]["spare_wty_calls"],
+        } for kname in kra_franchises]), use_container_width=True, height=360)
+
+        # Full data preview
+        st.markdown('<p style="font-size:13px;color:#64748B;font-weight:600;letter-spacing:0.8px;'
+                    'text-transform:uppercase;margin:20px 0 8px;">Full Data Preview</p>',
                     unsafe_allow_html=True)
         st.dataframe(pd.DataFrame([{
             "Franchise":      kname,
             "INS":            data[kname]["ins_closed"],
             "SER":            data[kname]["ser_closed"],
             "MC":             data[kname]["mc_hit_closed"],
-            "SA Total":       data[kname]["sa_total"],
-            "SA 25d":         data[kname]["sa_25days"],
             "AMC Tgt Nos":    data[kname]["amc_bdg_nos"],
             "AMC Nos Ach":    data[kname]["amc_nos_ach"],
-            "AMC Tgt Val":    f'{data[kname]["amc_bdg_val"]:,.0f}',
-            "AMC Val Ach":    f'{data[kname]["amc_val_ach"]:,.0f}',
-            "Spare AMC TY":   f'{data[kname]["spare_amc_ty"]:,.0f}',
-            "Spare AMC LY":   f'{data[kname]["spare_amc_ly"]:,.0f}',
-            "Spare AMC Calls":data[kname]["spare_amc_calls"],
-            "Spare Wty Calls":data[kname]["spare_wty_calls"],
+            "ESS Tgt":        f'{data[kname]["ess_tgt"]:,.0f}',
+            "ESS Ach":        f'{data[kname]["ess_ach"]:,.0f}',
             "Exchange":       data[kname]["exchange"],
-        } for kname in kra_franchises]), use_container_width=True, height=380)
+        } for kname in kra_franchises]), use_container_width=True, height=360)
 
         # Log
         st.markdown('<p style="font-size:13px;color:#64748B;font-weight:600;letter-spacing:0.8px;'
@@ -742,7 +849,6 @@ if not btn and not all_ready:
       <div style="font-size:48px;margin-bottom:16px;">📋</div>
       <h3 style="color:#4B5563;font-weight:600;margin:0 0 10px;">Ready to Begin</h3>
       <p style="color:#374151;font-size:14px;max-width:480px;margin:0 auto;line-height:1.7;">
-        Works for <strong style="color:#60A5FA;">any executive</strong> — franchises auto-detected,
-        rows matched independently per tab regardless of order.
+        Upload all 3 files, select the month, and click Generate.
       </p>
     </div>""", unsafe_allow_html=True)
