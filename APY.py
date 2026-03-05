@@ -299,7 +299,7 @@ if btn and all_ready:
 
         kl_wb    = load_workbook(BytesIO(kl_file.read()),    data_only=True)
         param_wb = load_workbook(BytesIO(param_file.read()), data_only=True)
-        kra_wb   = load_workbook(BytesIO(kra_file.read()),   keep_vba=False)
+        kra_wb = load_workbook(BytesIO(kra_file.read()))
         log(f"Loaded | {selected_month} | cluster_col:{cmc} mc_col:{mcc} kra_col:{kc}({scl}) amc_cols:{amc_base}-{amc_base+3}", "ok")
 
         # ── STEP 1: Read KRA franchises + auto-detect codes ─────────────────
